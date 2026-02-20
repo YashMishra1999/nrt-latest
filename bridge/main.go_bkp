@@ -1,0 +1,75 @@
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"encoding/hex"
+	"io"
+	"log"
+	"net/http"
+
+	coltrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
+)
+
+const weaviateURL = "http://weaviate:8080"
+
+func hexID(b []byte) string {
+	return hex.EncodeToString(b)
+}
+
+func save(traceID, spanID, name string) {
+	body := []byte(`{"class":"TraceSpan","properties":{
+		"trace_id":"` + traceID + `",
+		"span_id":"` + spanID + `",
+		"name":"` + name + `",
+		"service":"demo"}}`)
+	http.Post(weaviateURL+"/v1/objects", "application/json", bytes.NewReader(body))
+}
+
+func ingestHandler(w http.ResponseWriter, r *http.Request) {
+
+	var reader io.Reader = r.Body
+
+	// ✅ handle gzip compression
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gz, err := gzip.NewReader(r.Body)
+		if err != nil {
+			log.Println("gzip error:", err)
+			return
+		}
+		defer gz.Close()
+		reader = gz
+	}
+
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		log.Println("read error:", err)
+		return
+	}
+
+	req := &coltrace.ExportTraceServiceRequest{}
+	if err := proto.Unmarshal(raw, req); err != nil {
+		log.Println("invalid protobuf:", err)
+		return
+	}
+
+	count := 0
+
+	for _, rs := range req.ResourceSpans {
+		for _, ss := range rs.ScopeSpans {
+			for _, sp := range ss.Spans {
+				save(hexID(sp.TraceId), hexID(sp.SpanId), sp.Name)
+				count++
+			}
+		}
+	}
+
+	log.Printf("ingested spans: %d\n", count)
+}
+
+func main() {
+	http.HandleFunc("/v1/traces", ingestHandler)
+	log.Println("bridge listening :9000")
+	http.ListenAndServe(":9000", nil)
+}

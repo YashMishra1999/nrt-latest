@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+
+  weaviate:
+    image: semitechnologies/weaviate:1.25.5
+    ports:
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.99.0
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
+  bridge:
+    build: ./bridge
+    depends_on:
+      - weaviate
+      - otel-collector
+    ports:
+      - "9000:9000"
+
+  app:
+    build: ./app
+    depends_on:
+      - otel-collector
